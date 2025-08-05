@@ -7,6 +7,8 @@ ifeq (, $(shell which $(XCPRETTIFIER)))
         XCPRETTIFIER := cat
 endif
 
+IOS_DEPLOYMENT_TARGET := 15.0
+
 # The xcodebuild schemes will run the Makefile in the root directory to build
 # the libtailscale.a and libtailscale_ios.a dependencies.
 
@@ -35,6 +37,7 @@ ios:  ## Builds TailscaleKit for iOS to swift/build/Build/Products/Release-iphon
 	 -derivedDataPath build \
 	 -configuration Release \
 	 -destination 'generic/platform=iOS' \
+	 IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) \
 	 CODE_SIGNING_ALLOWED=NO | $(XCPRETTIFIER)
 
 .PHONY: ios-sim
@@ -47,6 +50,7 @@ ios-sim:  ## Builds TailscaleKit for iOS to swift/build/Build/Products/Release-i
 	 -derivedDataPath build \
 	 -configuration Release \
 	 -destination 'generic/platform=iOS Simulator' \
+	 IPHONEOS_DEPLOYMENT_TARGET=$(IOS_DEPLOYMENT_TARGET) \
 	 CODE_SIGNING_ALLOWED=NO | $(XCPRETTIFIER)
 
 .PHONY: ios-fat
