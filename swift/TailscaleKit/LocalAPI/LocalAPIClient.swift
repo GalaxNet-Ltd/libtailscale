@@ -146,7 +146,7 @@ public actor LocalAPIClient {
         if let error { throw error }
     }
 
-    func logout() async throws {
+    public func logout() async throws {
         let error = await doSimpleAPIRequest(
             endpoint: .logout,
             method: .POST,
