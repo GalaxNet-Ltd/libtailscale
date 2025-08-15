@@ -74,6 +74,7 @@ extern int tailscale_set_hostname(tailscale sd, const char* hostname);
 extern int tailscale_set_authkey(tailscale sd, const char* authkey);
 extern int tailscale_set_control_url(tailscale sd, const char* control_url);
 extern int tailscale_set_ephemeral(tailscale sd, int ephemeral);
+extern int tailscale_set_disable_log_tail(tailscale sd, int disable_log_tail);
 
 // tailscale_set_logfd instructs the tailscale instance to write logs to fd.
 //

@@ -11,18 +11,21 @@ public struct Configuration: Sendable {
     public let authKey: String?    ///< An auth key.  Leave empty to use web auth
     public let controlURL: String  ///< URL for Tailscale control
     public let ephemeral: Bool
+    public let disableLogTail: Bool
 
     public init(hostName: String,
                 path: String,
                 authKey: String?,
                 controlURL: String,
-                ephemeral: Bool = false)
+                ephemeral: Bool = false,
+                disableLogTail: Bool = false)
     {
         self.hostName = hostName
         self.path = path
         self.authKey = authKey
         self.controlURL = controlURL
         self.ephemeral = ephemeral
+        self.disableLogTail = disableLogTail
     }
 
 }
@@ -80,6 +83,7 @@ public actor TailscaleNode {
         tailscale_set_dir(tailscale, config.path)
         tailscale_set_control_url(tailscale, config.controlURL)
         tailscale_set_ephemeral(tailscale, config.ephemeral ? 1 : 0)
+        tailscale_set_disable_log_tail(tailscale, config.disableLogTail ? 1 : 0)
 
         let res = tailscale_start(tailscale)
 

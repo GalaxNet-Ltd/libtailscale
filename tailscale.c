@@ -18,6 +18,7 @@ extern int TsnetSetHostname(int sd, char* str);
 extern int TsnetSetAuthKey(int sd, char* str);
 extern int TsnetSetControlURL(int sd, char* str);
 extern int TsnetSetEphemeral(int sd, int ephemeral);
+extern int TsnetSetDisableLogTail(int sd, int disable_log_tail);
 extern int TsnetSetLogFD(int sd, int fd);
 extern int TsnetGetIps(int sd, char *buf, size_t buflen);
 extern int TsnetGetRemoteAddr(int listener, int conn, char *buf, size_t buflen);
@@ -95,6 +96,9 @@ int tailscale_set_control_url(tailscale sd, const char* control_url) {
 }
 int tailscale_set_ephemeral(tailscale sd, int ephemeral) {
 	return TsnetSetEphemeral(sd, ephemeral);
+}
+int tailscale_set_disable_log_tail(tailscale sd, int disable_log_tail) {
+	return TsnetSetDisableLogTail(sd, disable_log_tail);
 }
 int tailscale_set_logfd(tailscale sd, int fd) {
 	return TsnetSetLogFD(sd, fd);

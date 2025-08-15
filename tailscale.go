@@ -574,3 +574,17 @@ func TsnetEnableFunnelToLocalhostPlaintextHttp1(sd C.int, localhostPort C.int) C
 
 	return 0
 }
+
+//export TsnetSetDisableLogTail
+func TsnetSetDisableLogTail(sd C.int, e int) C.int {
+	s, err := getServer(sd)
+	if err != nil {
+		return s.recErr(err)
+	}
+	if e == 0 {
+		s.s.DisableLogTail = false
+	} else {
+		s.s.DisableLogTail = true
+	}
+	return 0
+}
