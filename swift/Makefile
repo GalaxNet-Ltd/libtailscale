@@ -26,6 +26,7 @@ xcframework: macos ios ios-sim  ## Builds universal TailscaleKit.xcframework
 		-framework ./build/Build/Products/Release-iphonesimulator/TailscaleKit.framework \
 		-output ./build/Build/Products/Release-xcframework/TailscaleKit.xcframework
 
+# we add MACH_O_TYPE=statclib for macOS to get rid of the complexity of dylib need signing.
 .PHONY: macos
 macos:  ## Builds TailscaleKit for macos to swift/build/Build/Products/Release (unsigned)
 	@echo
@@ -36,7 +37,7 @@ macos:  ## Builds TailscaleKit for macos to swift/build/Build/Products/Release (
 	 -derivedDataPath build \
 	 -configuration Release \
 	 -destination 'platform=macOS,arch=arm64' \
-	 CODE_SIGNING_ALLOWED=NO | $(XCPRETTIFIER)
+	 CODE_SIGNING_ALLOWED=NO MACH_O_TYPE=staticlib | $(XCPRETTIFIER)
 
 .PHONY: ios
 ios:  ## Builds TailscaleKit for iOS to swift/build/Build/Products/Release-iphoneos (unsigned)
