@@ -15,6 +15,17 @@ IOS_DEPLOYMENT_TARGET := 15.0
 .PHONY: all
 all: test ios macos ios-fat  ## Runs the tests and builds all library targets
 
+# create a unversal framework contain macos+ios+ios-sim(for test in iphone simulator)
+xcframework: macos ios ios-sim  ## Builds universal TailscaleKit.xcframework
+	@echo
+	@echo "::: Building TailscaleKit.xcframework for all platforms :::"
+	mkdir -p ./build/Build/Products/Release-xcframework
+	xcodebuild -create-xcframework \
+		-framework ./build/Build/Products/Release/TailscaleKit.framework \
+		-framework ./build/Build/Products/Release-iphoneos/TailscaleKit.framework \
+		-framework ./build/Build/Products/Release-iphonesimulator/TailscaleKit.framework \
+		-output ./build/Build/Products/Release-xcframework/TailscaleKit.xcframework
+
 .PHONY: macos
 macos:  ## Builds TailscaleKit for macos to swift/build/Build/Products/Release (unsigned)
 	@echo
