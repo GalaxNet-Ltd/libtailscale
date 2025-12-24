@@ -12,7 +12,8 @@ extern int TsnetStart(int sd);
 extern int TsnetUp(int sd);
 extern int TsnetClose(int sd);
 extern int TsnetErrmsg(int sd, char* buf, size_t buflen);
-extern int TsnetDial(int sd, char* net, char* addr, int* connOut);
+extern int TsnetDial(int sd, char *net, char *addr, int *connOut);
+extern int TsnetDialWithTimeout(int sd, char* net, char* addr, int timeout_secs, int* connOut);
 extern int TsnetSetDir(int sd, char* str);
 extern int TsnetSetHostname(int sd, char* str);
 extern int TsnetSetAuthKey(int sd, char* str);
@@ -45,6 +46,10 @@ int tailscale_close(tailscale sd) {
 
 int tailscale_dial(tailscale sd, const char* network, const char* addr, tailscale_conn* conn_out) {
 	return TsnetDial(sd, (char*)network, (char*)addr, (int*)conn_out);
+}
+
+int tailscale_dial_with_timeout(tailscale sd, const char* network, const char* addr, int timeout_secs, tailscale_conn* conn_out) {
+	return TsnetDialWithTimeout(sd, (char*)network, (char*)addr, timeout_secs, (int*)conn_out);
 }
 
 int tailscale_listen(tailscale sd, const char* network, const char* addr, tailscale_listener* listener_out) {

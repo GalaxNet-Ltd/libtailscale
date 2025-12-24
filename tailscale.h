@@ -106,7 +106,10 @@ extern int tailscale_getips(tailscale sd, char* buf, size_t buflen);
 // It will start the server if it has not been started yet.
 //
 // Returns zero on success or -1 on error, call tailscale_errmsg for details.
-extern int tailscale_dial(tailscale sd, const char* network, const char* addr, tailscale_conn* conn_out);
+extern int tailscale_dial(tailscale sd, const char *network, const char *addr,
+                          tailscale_conn *conn_out);
+
+extern int tailscale_dial_with_timeout(tailscale sd, const char* network, const char* addr, int timeout_secs, tailscale_conn* conn_out);
 
 // A tailscale_listener is a socket on the tailnet listening for connections.
 //

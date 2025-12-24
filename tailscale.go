@@ -19,6 +19,7 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/hostinfo"
@@ -451,6 +452,31 @@ func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
 	}
 	s.started = true
 	if err := newConn(s, netConn, connOut); err != nil {
+		return s.recErr(err)
+	}
+	return 0
+}
+
+//export TsnetDialWithTimeout
+func TsnetDialWithTimeout(sd C.int, network, addr *C.char, timeoutSecs C.int, connOut *C.int) C.int {
+	s, err := getServer(sd)
+	if err != nil {
+		return s.recErr(err)
+	}
+
+	ctx := context.Background()
+	if timeoutSecs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
+		defer cancel()
+	}
+
+	netConn, err := s.s.Dial(ctx, C.GoString(network), C.GoString(addr))
+	if err != nil {
+		return s.recErr(err)
+	}
+
+	if err = newConn(s, netConn, connOut); err != nil {
 		return s.recErr(err)
 	}
 	return 0

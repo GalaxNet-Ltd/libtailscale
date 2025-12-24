@@ -19,7 +19,9 @@ all: test ios macos ios-fat  ## Runs the tests and builds all library targets
 xcframework: macos ios ios-sim  ## Builds universal TailscaleKit.xcframework
 	@echo
 	@echo "::: Building TailscaleKit.xcframework for all platforms :::"
+	cd .. && make clean
 	mkdir -p ./build/Build/Products/Release-xcframework
+	rm -rf ./build/Build/Products/Release-xcframework
 	xcodebuild -create-xcframework \
 		-framework ./build/Build/Products/Release/TailscaleKit.framework \
 		-framework ./build/Build/Products/Release-iphoneos/TailscaleKit.framework \
