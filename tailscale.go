@@ -459,9 +459,9 @@ func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
 
 //export TsnetDialWithTimeout
 func TsnetDialWithTimeout(sd C.int, network, addr *C.char, timeoutSecs C.int, connOut *C.int) C.int {
-	s, err := getServer(sd)
-	if err != nil {
-		return s.recErr(err)
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
 	}
 
 	ctx := context.Background()
@@ -650,9 +650,9 @@ func TsnetEnableFunnelToLocalhostPlaintextHttp1(sd C.int, localhostPort C.int) C
 
 //export TsnetSetDisableLogTail
 func TsnetSetDisableLogTail(sd C.int, e int) C.int {
-	s, err := getServer(sd)
-	if err != nil {
-		return s.recErr(err)
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
 	}
 	if e == 0 {
 		s.s.DisableLogTail = false

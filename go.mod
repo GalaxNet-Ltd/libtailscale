@@ -2,11 +2,14 @@ module github.com/tailscale/libtailscale
 
 go 1.25.5
 
-toolchain go1.24.6
-
 // NOVA_MOD: use nova self maintained branch, used for disable logtail.
 // 2603: update to taislcale 1.94.x
-replace tailscale.com => github.com/GalaxNet-Ltd/tailscale b792558dbb66c32a520f5a00a88e4bd9d554f562
+replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260309033801-b792558dbb66
+
+require (
+	golang.org/x/sys v0.40.0
+	tailscale.com v0.0.0-00010101000000-000000000000
+)
 
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
@@ -92,7 +95,6 @@ require (
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
