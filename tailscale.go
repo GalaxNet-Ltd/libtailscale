@@ -471,6 +471,7 @@ func TsnetDialWithTimeout(sd C.int, network, addr *C.char, timeoutSecs C.int, co
 		defer cancel()
 	}
 
+	s.started = true
 	netConn, err := s.s.Dial(ctx, C.GoString(network), C.GoString(addr))
 	if err != nil {
 		return s.recErr(err)
