@@ -42,18 +42,16 @@ public class MessageProcessor: @unchecked Sendable {
         reader.stop()
     }
 
-    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: (@Sendable (Error) -> Void)? = nil) {
-        workQueue.addOperation { [weak self] in
-            guard let self = self else { return }
-            logger?.log("Starting MessageProcessor for \(request.url?.absoluteString ?? "nil")")
-            cancel()
-            let errorHandler = errorHandler ?? { [weak self] error in
-                self?.processError(error)
-            }
-
-            reader.start(request, config: config, errorHandler: errorHandler)
-            startMessageQueuePoll()
+    // make this async because we need get the state by await in swift.
+    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: (@Sendable (Error) -> Void)? = nil) async throws {
+        logger?.log("Starting MessageProcessor for \(request.url?.absoluteString ?? "nil")")
+        cancel()
+        let errorHandler = errorHandler ?? { [weak self] error in
+            self?.processError(error)
         }
+
+        try await reader.start(request, config: config, errorHandler: errorHandler)
+        startMessageQueuePoll()
     }
 
     public  func cancel() {

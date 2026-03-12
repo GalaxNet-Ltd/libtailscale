@@ -4,7 +4,8 @@ go 1.25.5
 
 // NOVA_MOD: use nova self maintained branch, used for disable logtail.
 // 2603: update to taislcale 1.94.x
-replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260309033801-b792558dbb66
+// 2603: update to fix wifi link by add tryHeal to tailscale branch
+replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260312014956-4092ba466781
 
 require (
 	golang.org/x/sys v0.40.0

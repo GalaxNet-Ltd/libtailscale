@@ -188,6 +188,10 @@ extern int tailscale_accept(tailscale_listener listener, tailscale_conn* conn_ou
 // Returns zero on success or -1 on error, call tailscale_errmsg for details.
 extern int tailscale_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out);
 
+// verify that the loopback proxy/localapi mux is still listening and
+// recreate it after app foregrounding when iOS has reclaimed the socket.
+extern int tailscale_restart_loopback_if_needed(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out, int* restarted_out);
+
 // tailscale_errmsg writes the details of the last error to buf.
 //
 // After returning, buf is always NUL-terminated.

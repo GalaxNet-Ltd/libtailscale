@@ -69,7 +69,8 @@ public actor LocalAPIClient {
                                                                           params: params)
 
         let messageProcessor = await MessageProcessor(consumer: consumer, logger: logger)
-        messageProcessor.start(request, config: sessionConfig)
+        // now it's async.
+        try await messageProcessor.start(request, config: sessionConfig)
         return messageProcessor
     }
 

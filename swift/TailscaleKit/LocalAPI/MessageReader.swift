@@ -36,6 +36,8 @@ final class MessageReader: NSObject, URLSessionDataDelegate, @unchecked Sendable
     var congested = false
 
     var errorHandler: (@Sendable (Error) -> Void)?
+    private var startupContinuation: CheckedContinuation<Void, Error>?
+    private var startupCompleted = false
 
     init(logger: LogSink? = nil) {
         self.logger = logger
@@ -48,25 +50,33 @@ final class MessageReader: NSObject, URLSessionDataDelegate, @unchecked Sendable
         workQueue.cancelAllOperations()
     }
 
-    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: @escaping @Sendable (Error) -> Void  ) {
-        workQueue.addOperation { [weak self] in
-            guard let self = self else { return }
+    // make this function async to wait http client really work.
+    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: @escaping @Sendable (Error) -> Void  ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            workQueue.addOperation { [weak self] in
+                guard let self = self else {
+                    continuation.resume(throwing: LocalAPIError.localAPIBadResponse)
+                    return
+                }
 
-            self.errorHandler = errorHandler
+                self.errorHandler = errorHandler
+                self.startupContinuation = continuation
+                self.startupCompleted = false
 
-            buffer = Data()
-            pendingMessages = []
-            congested = false
+                buffer = Data()
+                pendingMessages = []
+                congested = false
 
-            dataTask?.cancel()
-            ipnWatchSession?.invalidateAndCancel()
+                dataTask?.cancel()
+                ipnWatchSession?.invalidateAndCancel()
 
-            ipnWatchSession = URLSession(configuration: config,
-                                         delegate: self,
-                                         delegateQueue: workQueue)
+                ipnWatchSession = URLSession(configuration: config,
+                                             delegate: self,
+                                             delegateQueue: workQueue)
 
-            dataTask = ipnWatchSession?.dataTask(with: request)
-            dataTask?.resume()
+                dataTask = ipnWatchSession?.dataTask(with: request)
+                dataTask?.resume()
+            }
         }
     }
 
@@ -98,8 +108,29 @@ final class MessageReader: NSObject, URLSessionDataDelegate, @unchecked Sendable
             if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
                 return
             }
+            finishStartup(with: .failure(error))
             errorHandler?(error)
         }
+    }
+
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            finishStartup(with: .failure(LocalAPIError.localAPIBadResponse))
+            completionHandler(.cancel)
+            return
+        }
+
+        guard httpResponse.statusCode < 300 else {
+            finishStartup(with: .failure(LocalAPIError.localAPIStatusError(status: httpResponse.statusCode, body: "")))
+            completionHandler(.cancel)
+            return
+        }
+
+        finishStartup(with: .success(()))
+        completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession,
@@ -123,6 +154,22 @@ final class MessageReader: NSObject, URLSessionDataDelegate, @unchecked Sendable
                 }
                 pendingMessages.append(buffer)
                 buffer.removeAll(keepingCapacity: true)
+            }
+        }
+    }
+
+    private func finishStartup(with result: Result<Void, Error>) {
+        workQueue.addOperation { [weak self] in
+            guard let self else { return }
+            guard !startupCompleted, let startupContinuation else { return }
+            startupCompleted = true
+            self.startupContinuation = nil
+
+            switch result {
+            case .success:
+                startupContinuation.resume()
+            case .failure(let error):
+                startupContinuation.resume(throwing: error)
             }
         }
     }

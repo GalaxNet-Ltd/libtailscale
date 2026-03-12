@@ -110,6 +110,9 @@ public actor TailscaleNode {
             throw TailscaleError.badInterfaceHandle
         }
 
+        // clear cached loopback config so tailnet switches never keep
+        // a stale local proxy endpoint from the previous server instance.
+        loopbackConfig = nil
         logger?.log("Closing Tailscale: \(tailscale)")
         let res = tailscale_close(tailscale)
 
@@ -239,6 +242,44 @@ public actor TailscaleNode {
         return loopbackConfig!
 
     }
+
+    public struct LoopbackRestartResult: Sendable {
+        public let config: LoopbackConfig
+        public let restarted: Bool
+    }
+
+    public func restartLoopbackIfNeeded() throws -> LoopbackRestartResult {
+        guard let tailscale else {
+            throw TailscaleError.badInterfaceHandle
+        }
+
+        let addrBuf = UnsafeMutablePointer<Int8>.allocate(capacity: 64)
+        let proxyCredBuf = UnsafeMutablePointer<Int8>.allocate(capacity: 33)
+        let apiCredBuf = UnsafeMutablePointer<Int8>.allocate(capacity: 33)
+        let restartedOut = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        defer {
+            addrBuf.deallocate()
+            proxyCredBuf.deallocate()
+            apiCredBuf.deallocate()
+            restartedOut.deallocate()
+        }
+
+        restartedOut.initialize(to: 0)
+        let res = tailscale_restart_loopback_if_needed(tailscale, addrBuf, 64, proxyCredBuf, apiCredBuf, restartedOut)
+        guard res == 0 else {
+            throw TailscaleError.fromPosixErrCode(res, tailscale.getErrorMessage())
+        }
+
+        let config = LoopbackConfig(
+            address: String(cString: addrBuf),
+            proxyCredential: String(cString: proxyCredBuf),
+            localAPIKey: String(cString: apiCredBuf)
+        )
+        // update the cached loopback endpoint so future LocalAPI and
+        // SOCKS5 clients use the recovered listener address immediately.
+        loopbackConfig = config
+        return LoopbackRestartResult(config: config, restarted: restartedOut.pointee != 0)
+    }
 }
 
 // MARK: - IP String list to IPAddresses tuple
@@ -281,5 +322,4 @@ extension String {
         return .none
     }
 }
-
 

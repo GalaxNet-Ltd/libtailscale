@@ -26,6 +26,7 @@ extern int TsnetGetRemoteAddr(int listener, int conn, char *buf, size_t buflen);
 extern int TsnetListen(int sd, char* net, char* addr, int* listenerOut);
 extern int TsnetAccept(int ld, int* connOut);
 extern int TsnetLoopback(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut);
+extern int TsnetRestartLoopbackIfNeeded(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut, int* restartedOut);
 extern int TsnetEnableFunnelToLocalhostPlaintextHttp1(int sd, int localhostPort);
 
 tailscale tailscale_new() {
@@ -92,6 +93,11 @@ int tailscale_set_logfd(tailscale sd, int fd) {
 
 int tailscale_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out) {
 	return TsnetLoopback(sd, addr_out, addrlen, proxy_cred_out, local_api_cred_out);
+}
+
+int tailscale_restart_loopback_if_needed(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out, int* restarted_out) {
+	// expose foreground loopback recovery to Swift without rebuilding the calling convention there.
+	return TsnetRestartLoopbackIfNeeded(sd, addr_out, addrlen, proxy_cred_out, local_api_cred_out, restarted_out);
 }
 
 int tailscale_errmsg(tailscale sd, char* buf, size_t buflen) {

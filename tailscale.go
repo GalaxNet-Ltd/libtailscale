@@ -608,6 +608,63 @@ func TsnetLoopback(sd C.int, addrOut *C.char, addrLen C.size_t, proxyOut *C.char
 	return 0
 }
 
+//export TsnetRestartLoopbackIfNeeded
+func TsnetRestartLoopbackIfNeeded(sd C.int, addrOut *C.char, addrLen C.size_t, proxyOut *C.char, localOut *C.char, restartedOut *C.int) C.int {
+	// use the same buffer contract as TsnetLoopback so the Swift
+	// wrapper can refresh a dead loopback proxy after foregrounding on iOS.
+	if addrOut == nil {
+		panic("restart_loopback_api passed nil addr_out")
+	} else if addrLen == 0 {
+		panic("restart_loopback_api passed addrlen of 0")
+	} else if proxyOut == nil {
+		panic("restart_loopback_api passed nil proxy_cred_out")
+	} else if localOut == nil {
+		panic("restart_loopback_api passed nil local_api_cred_out")
+	} else if restartedOut == nil {
+		panic("restart_loopback_api passed nil restarted_out")
+	}
+
+	*addrOut = '\x00'
+	*localOut = '\x00'
+	*proxyOut = '\x00'
+	*restartedOut = 0
+
+	s := getServer(sd)
+	if s == nil {
+		return C.EBADF
+	}
+	addr, proxyCred, localAPICred, restarted, err := s.s.RestartLoopbackIfNeeded()
+	if err != nil {
+		return s.recErr(err)
+	}
+	if len(proxyCred) != 32 {
+		return s.recErr(fmt.Errorf("libtailscale: len(proxyCred)=%d, want 32", len(proxyCred)))
+	}
+	if len(localAPICred) != 32 {
+		return s.recErr(fmt.Errorf("libtailscale: len(localAPICred)=%d, want 32", len(localAPICred)))
+	}
+
+	out := unsafe.Slice((*byte)(unsafe.Pointer(addrOut)), addrLen)
+	n := copy(out, addr)
+	if n >= len(out) {
+		out[len(out)-1] = '\x00'
+		return C.ERANGE
+	}
+	out[n] = '\x00'
+
+	out = unsafe.Slice((*byte)(unsafe.Pointer(proxyOut)), 33)
+	copy(out, proxyCred)
+	out[32] = '\x00'
+	out = unsafe.Slice((*byte)(unsafe.Pointer(localOut)), 33)
+	copy(out, localAPICred)
+	out[32] = '\x00'
+	if restarted {
+		*restartedOut = 1
+	}
+
+	return 0
+}
+
 //export TsnetEnableFunnelToLocalhostPlaintextHttp1
 func TsnetEnableFunnelToLocalhostPlaintextHttp1(sd C.int, localhostPort C.int) C.int {
 	s := getServer(sd)

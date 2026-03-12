@@ -179,6 +179,11 @@ extern int tailscale_accept(tailscale_listener listener, tailscale_conn* conn_ou
 // Returns zero on success or -1 on error, call tailscale_errmsg for details.
 extern int tailscale_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out);
 
+// tailscale_restart_loopback_if_needed verifies the loopback mux is
+// still alive and recreates it after foregrounding if iOS has torn it down.
+// restarted_out is set to 1 when the listener was recreated, otherwise 0.
+extern int tailscale_restart_loopback_if_needed(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out, int* restarted_out);
+
 // tailscale_enable_funnel_to_localhost_plaintext_http1 configures sd to have
 // Tailscale Funnel enabled, routing requests from the public web
 // (without any authentication) down to this Tailscale node, requesting new 
