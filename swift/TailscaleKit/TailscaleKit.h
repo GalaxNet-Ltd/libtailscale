@@ -202,7 +202,8 @@ extern int tailscale_restart_loopback_if_needed(tailscale sd, char* addr_out, si
 //     ERANGE - insufficient storage for buf
 extern int tailscale_errmsg(tailscale sd, char* buf, size_t buflen);
 
-
+// NOVA_MOD:
+extern void tailscale_update_def_if(char* def_if);
 
 #ifdef __cplusplus
 }

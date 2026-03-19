@@ -28,6 +28,8 @@ extern int TsnetAccept(int ld, int* connOut);
 extern int TsnetLoopback(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut);
 extern int TsnetRestartLoopbackIfNeeded(int sd, char* addrOut, size_t addrLen, char* proxyOut, char* localOut, int* restartedOut);
 extern int TsnetEnableFunnelToLocalhostPlaintextHttp1(int sd, int localhostPort);
+// NOVA_MOD:
+extern void TsnetUpdateDefIf(char *defIf);
 
 tailscale tailscale_new() {
 	return TsnetNewServer();
@@ -106,4 +108,9 @@ int tailscale_errmsg(tailscale sd, char* buf, size_t buflen) {
 
 int tailscale_enable_funnel_to_localhost_plaintext_http1(tailscale sd, int localhostPort) {
 	return TsnetEnableFunnelToLocalhostPlaintextHttp1(sd, localhostPort);
+}
+
+// NOVA_MOD:
+void tailscale_update_def_if(char *def_if) {
+        return TsnetUpdateDefIf(def_if);
 }

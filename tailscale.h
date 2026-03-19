@@ -67,6 +67,7 @@ extern int tailscale_set_hostname(tailscale sd, const char* hostname);
 extern int tailscale_set_authkey(tailscale sd, const char* authkey);
 extern int tailscale_set_control_url(tailscale sd, const char* control_url);
 extern int tailscale_set_ephemeral(tailscale sd, int ephemeral);
+// NOVA_MOD: allow opt-out logtail.
 extern int tailscale_set_disable_log_tail(tailscale sd, int disable_log_tail);
 
 // tailscale_set_logfd instructs the tailscale instance to write logs to fd.
@@ -109,6 +110,7 @@ extern int tailscale_getips(tailscale sd, char* buf, size_t buflen);
 extern int tailscale_dial(tailscale sd, const char *network, const char *addr,
                           tailscale_conn *conn_out);
 
+// NOVA_MOD: timeout
 extern int tailscale_dial_with_timeout(tailscale sd, const char* network, const char* addr, int timeout_secs, tailscale_conn* conn_out);
 
 // A tailscale_listener is a socket on the tailnet listening for connections.
@@ -210,6 +212,8 @@ extern int tailscale_enable_funnel_to_localhost_plaintext_http1(tailscale sd, in
 // 	ERANGE - insufficient storage for buf
 extern int tailscale_errmsg(tailscale sd, char* buf, size_t buflen);
 
+// NOVA_MOD: add def if update.
+extern void tailscale_update_def_if(char *def_if);
 
 #ifdef __cplusplus
 }

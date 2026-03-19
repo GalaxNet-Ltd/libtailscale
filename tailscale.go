@@ -26,6 +26,8 @@ import (
 	"tailscale.com/ipn"
 	"tailscale.com/tsnet"
 	"tailscale.com/types/logger"
+	// NOVA_MOD: export the defif api in netmon
+	"tailscale.com/net/netmon"
 )
 
 func main() {}
@@ -718,4 +720,11 @@ func TsnetSetDisableLogTail(sd C.int, e int) C.int {
 		s.s.DisableLogTail = true
 	}
 	return 0
+}
+
+//export TsnetUpdateDefIf
+func TsnetUpdateDefIf(defIf *C.char) {
+	// NOVA_MOD: swifth part notify the lastest if if netmon itself does not work.
+	goDefIf := C.GoString(defIf)
+	netmon.UpdateLastKnownDefaultRouteInterface(goDefIf)
 }
