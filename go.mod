@@ -6,7 +6,7 @@ module github.com/tailscale/libtailscale
 // 2606: update to latest tailscale release/1.98 branch with all our mods (go toolchain updated to 1.26.3)
 go 1.26.3
 
-replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260601011752-5370342e7ecc
+replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260610043755-e1cbc8909f10
 
 require (
 	golang.org/x/sys v0.43.0
