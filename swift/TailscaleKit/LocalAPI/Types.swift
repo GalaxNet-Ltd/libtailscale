@@ -297,7 +297,7 @@ public struct IpnState: Sendable {
         public var MagicDNSEnabled: Bool
     }
 
-    struct PingResult: Codable, Sendable {
+    public struct PingResult: Codable, Sendable {
         public var IP: IP.Addr
         public var Err: String
         public var LatencySeconds: TimeInterval
@@ -496,4 +496,3 @@ struct GoError: Codable, Sendable, LocalizedError {
         return Error
     }
 }
-

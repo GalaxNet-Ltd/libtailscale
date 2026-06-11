@@ -33,7 +33,12 @@ public actor LocalAPIClient {
         case profiles = "profiles"
         case profilesCurrent = "profiles/current"
         case status = "status"
+        case ping = "ping"
         case watchIPNBus = "watch-ipn-bus"
+    }
+
+    public enum PingType: String, Sendable {
+        case disco
     }
 
     /// The local node that will be handling our localAPI requests.
@@ -236,6 +241,28 @@ public actor LocalAPIClient {
         switch result {
         case .success(let result):  return result
         case .failure(let error):  throw error
+        }
+    }
+
+    public func ping(
+        ip: String,
+        type: PingType = .disco,
+        timeoutInterval: TimeInterval = 2
+    ) async throws -> IpnState.PingResult {
+        let params = [
+            URLQueryItem(name: "ip", value: ip),
+            URLQueryItem(name: "type", value: type.rawValue),
+        ]
+        let result = await doSimpleAPIRequest(
+            endpoint: .ping,
+            params: params,
+            method: .POST,
+            timeoutInterval: timeoutInterval,
+            resultTransformer: jsonDecodeTransformer(IpnState.PingResult.self))
+
+        switch result {
+        case .success(let result): return result
+        case .failure(let error): throw error
         }
     }
 
