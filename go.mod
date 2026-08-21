@@ -4,9 +4,10 @@ module github.com/tailscale/libtailscale
 // 2603: update to taislcale 1.94.x
 // 2603: update to fix wifi link by add tryHeal to tailscale branch
 // 2606: update to latest tailscale release/1.98 branch with all our mods (go toolchain updated to 1.26.3)
+// 2608: workaround for ipv4 receive func issue
 go 1.26.3
 
-replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260813075217-217ce65bdd2c
+replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260821070311-0d02712bbcd6
 
 require (
 	golang.org/x/sys v0.43.0
