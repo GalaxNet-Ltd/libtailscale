@@ -7,7 +7,7 @@ module github.com/tailscale/libtailscale
 // 2608: workaround for ipv4 receive func issue
 go 1.26.3
 
-replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260821070311-0d02712bbcd6
+replace tailscale.com => github.com/GalaxNet-Ltd/tailscale v0.0.0-20260821144644-dd3579daba89
 
 require (
 	golang.org/x/sys v0.43.0
