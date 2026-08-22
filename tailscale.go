@@ -18,8 +18,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"unsafe"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 	"tailscale.com/hostinfo"
@@ -43,6 +43,7 @@ type server struct {
 	s       *tsnet.Server
 	lastErr string
 	started bool
+	logFile *os.File
 }
 
 func getServer(sd C.int) *server {
@@ -143,6 +144,7 @@ func TsnetClose(sd C.int) C.int {
 	if s == nil {
 		return C.EBADF
 	}
+	defer s.closeLogFile()
 
 	// TODO: cancel Up
 	// TODO: close related listeners / conns.
@@ -545,16 +547,53 @@ func TsnetSetLogFD(sd, fd C.int) C.int {
 	if s == nil {
 		return C.EBADF
 	}
-	if fd == -1 {
-		s.s.Logf = logger.Discard
-		return 0
+	if err := s.setLogFD(int(fd)); err != nil {
+		return s.recErr(err)
 	}
-	f := os.NewFile(uintptr(fd), "logfd")
+	return 0
+}
+
+func (s *server) setLogFD(fd int) error {
+	if fd == -1 {
+		s.closeLogFile()
+		return nil
+	}
+
+	// The C API borrows the caller's descriptor. os.NewFile assumes ownership
+	// and may close its descriptor from a garbage-collection finalizer, so give
+	// Go a duplicate that it can own without invalidating or later reusing the
+	// caller's descriptor.
+	ownedFD, err := syscall.Dup(fd)
+	if err != nil {
+		return fmt.Errorf("libtailscale: duplicate log fd: %w", err)
+	}
+
+	f := os.NewFile(uintptr(ownedFD), "logfd")
+	if f == nil {
+		syscall.Close(ownedFD)
+		return fmt.Errorf("libtailscale: invalid duplicated log fd")
+	}
+
+	previous := s.logFile
+	s.logFile = f
 	s.s.Logf = func(format string, args ...any) {
 		fmt.Fprintf(f, format, args...)
 		fmt.Fprintf(f, "\n")
 	}
-	return 0
+	if previous != nil {
+		_ = previous.Close()
+	}
+	return nil
+}
+
+func (s *server) closeLogFile() {
+	s.s.Logf = logger.Discard
+	if s.logFile == nil {
+		return
+	}
+
+	_ = s.logFile.Close()
+	s.logFile = nil
 }
 
 //export TsnetLoopback

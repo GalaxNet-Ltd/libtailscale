@@ -79,6 +79,7 @@ extern int tailscale_set_disable_log_tail(tailscale sd, int disable_log_tail);
 // tailscale_set_logfd instructs the tailscale instance to write logs to fd.
 //
 // An fd value of -1 means discard all logging.
+// The caller retains ownership of fd; libtailscale duplicates it internally.
 //
 // Returns zero on success or -1 on error, call tailscale_errmsg for details.
 extern int tailscale_set_logfd(tailscale sd, int fd);
