@@ -5,33 +5,23 @@ import Foundation
 
 let kJsonNewline = UInt8(ascii: "\n")
 
-/// The polling interval for the message queue
-let kProcessorQueuePollInterval: UInt64 = 100_000_000 // Nanos
-
 /// A MessageConsumer consumes incoming messages from the IPNBus and handles any
 /// potential errors.
 public protocol MessageConsumer: Actor {
-     func notify(_ notify: Ipn.Notify)
-     func error(_ error: Error)
+    func notify(_ notify: Ipn.Notify) async
+    func error(_ error: Error) async
 }
 
-
-/// MessageProcessor pulls queued Decodable messages from a MessageReader, deserializes them
-/// and forwards the deserialized objects and any errors to the consumer.
+/// Decodes and delivers IPN notifications in order, as soon as they arrive.
 public class MessageProcessor: @unchecked Sendable {
     let consumer: any MessageConsumer
     let reader: MessageReader
-    let workQueue = OperationQueue()
-    var logger: LogSink?
-
-
-    // A long running task to poll the queue
-    var pollTask: Task<Void, Error>?
+    private let logger: LogSink?
+    private let lifecycleLock = NSLock()
+    private var processingTask: Task<Void, Never>?
+    private var cancelled = false
 
     init(consumer: any MessageConsumer, logger: LogSink?) async {
-        workQueue.maxConcurrentOperationCount = 1
-        workQueue.name = "io.tailscale.ipn.MessageProcessor.workQueue"
-
         self.logger = logger
         self.consumer = consumer
         self.reader = MessageReader()
@@ -39,65 +29,79 @@ public class MessageProcessor: @unchecked Sendable {
 
     deinit {
         cancel()
+    }
+
+    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: (@Sendable (Error) -> Void)? = nil) async throws {
+        let trace = WatchStartupTrace(logger: logger)
+        trace.record("processor_start")
+        logger?.log("Starting MessageProcessor for \(request.url?.absoluteString ?? "nil")")
+        do {
+            try await reader.start(request, config: config, trace: trace)
+            try Task.checkCancellation()
+            trace.record("reader_start_returned")
+            startProcessingMessages(errorHandler: errorHandler, trace: trace)
+        } catch {
+            cancel()
+            throw error
+        }
+    }
+
+    /// Cancel the consumer and close the HTTP watch. The worker captures its
+    /// dependencies rather than this processor, so releasing it also stops it.
+    public func cancel() {
+        lifecycleLock.lock()
+        cancelled = true
+        let task = processingTask
+        processingTask = nil
+        lifecycleLock.unlock()
+        task?.cancel()
         reader.stop()
     }
 
-    // make this async because we need get the state by await in swift.
-    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: (@Sendable (Error) -> Void)? = nil) async throws {
-        logger?.log("Starting MessageProcessor for \(request.url?.absoluteString ?? "nil")")
-        cancel()
-        let errorHandler = errorHandler ?? { [weak self] error in
-            self?.processError(error)
-        }
-
-        try await reader.start(request, config: config, errorHandler: errorHandler)
-        startMessageQueuePoll()
-    }
-
-    public  func cancel() {
-        pollTask?.cancel()
-    }
-
-    func startMessageQueuePoll() {
-        pollTask?.cancel()
-        pollTask = Task {
-            await watchMessageQueue()
-        }
-    }
-
-    func watchMessageQueue() async {
-        logger?.log("Watching MessageReader")
-        while !Task.isCancelled {
-            reader.consume { [weak self] data in
-                if let data {
-                    self?.processMessage(data)
-                }
-            }
-            try? await Task.sleep(nanoseconds: kProcessorQueuePollInterval)
-        }
-        logger?.log("Unwatching MessageReader")
-    }
-
-    func processMessage(_ data: Data) {
-        workQueue.addOperation { [weak self] in
-            guard let self else { return }
-            let lines = data.split(separator: kJsonNewline)
-            for line in lines {
-                do {
-                    let notify = try JSONDecoder().decode(Ipn.Notify.self, from: line)
-                    Task {
-                        await consumer.notify(notify)
+    func startProcessingMessages(errorHandler: (@Sendable (Error) -> Void)? = nil,
+                                 trace: WatchStartupTrace? = nil) {
+        trace?.record("worker_launch_requested")
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard !cancelled, processingTask == nil else { return }
+        let consumer = consumer
+        let reader = reader
+        let logger = logger
+        processingTask = Task {
+            trace?.record("worker_started")
+            logger?.log("Watching MessageReader")
+            defer { logger?.log("Unwatching MessageReader") }
+            let decoder = JSONDecoder()
+            var deliveredFirstMessage = false
+            do {
+                for try await data in reader.messages {
+                    try Task.checkCancellation()
+                    let notify: Ipn.Notify
+                    do {
+                        notify = try decoder.decode(Ipn.Notify.self, from: data)
+                    } catch {
+                        logger?.log("Failed to decode message: \(error.localizedDescription)")
+                        throw error
                     }
-                } catch {
-                    logger?.log("Failed to decode message: \(error.localizedDescription)")
+                    // Await each delivery rather than launching independent
+                    // tasks that can reorder backend state transitions.
+                    try Task.checkCancellation()
+                    if !deliveredFirstMessage { trace?.record("first_message_decoded") }
+                    await consumer.notify(notify)
+                    if !deliveredFirstMessage {
+                        deliveredFirstMessage = true
+                        trace?.record("first_message_delivered")
+                    }
+                }
+            } catch {
+                reader.stop()
+                guard !Task.isCancelled else { return }
+                if let errorHandler {
+                    errorHandler(error)
+                } else {
+                    await consumer.error(error)
                 }
             }
-        }
-    }
-
-    func processError(_ error: Error) {
-        Task {
-            await consumer.error(error)
         }
     }
 }
