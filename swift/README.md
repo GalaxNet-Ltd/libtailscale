@@ -75,6 +75,39 @@ so this focused command excludes that file from compilation. It does not verify
 the legacy connection tests. The stream tests use an in-memory HTTP protocol
 and do not contact a coordinator or require an authorized tailnet.
 
+## NovaScale local-app proxy bridge
+
+`tailscale_local_proxy_start/route/stats/stop` is a separate, explicit-opt-in
+listener for other applications on the same device. It binds IPv4 loopback only;
+it does not expose or change authenticated `Loopback()` / LocalAPI access.
+SOCKS5 supports no-auth TCP CONNECT (no BIND/UDP). Go's standard HTTP stack handles
+absolute-form requests, CONNECT, streaming and upgrades. Routes resolve only exact
+peer IPs or unambiguous MagicDNS names from the selected node's current typed status;
+there is no system DNS, public-internet, subnet-route or exit-node fallback.
+
+The proxy ID owns the listener independently of a node handle. Call `route(id, -1)`
+before replacing/closing a node; it closes accepted streams and cancels pending
+work, but reserves the same port. Route to the replacement node only after its
+Running state. Existing streams are never migrated/replayed. `stop` closes only
+this listener and its streams. Its caller owns entitlement decisions and must not
+start it silently after app relaunch. `stats` counts connected client sockets with
+at least one successful upstream dial; an HTTP keep-alive socket can remain counted
+until its 30-second idle timeout. This is not byte-activity telemetry.
+
+Regression checks and artifact rebuild, without changing dependency versions:
+
+```sh
+# From the libtailscale root:
+go test -race ./localproxy . -run 'Test(LocalProxy|HTTP|Reject|SOCKS|Switch|Client|Mapped)'
+# From swift/ (force Go source/header changes through all framework slices):
+make -B xcframework
+```
+
+The app imports the generated Release-xcframework artifact. Header declarations in
+`tailscale.h` and `swift/TailscaleKit/TailscaleKit.h` must remain aligned. These new
+files plus the appended C bridge comprise this feature's fork changes; neither the
+Tailscale module revision nor the existing Swift node/dial/Loopback APIs changed.
+
 ## Usage
 
 Nodes need to be authorized in order to function. Set an auth key via

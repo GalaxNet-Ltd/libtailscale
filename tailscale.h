@@ -180,6 +180,13 @@ extern int tailscale_accept(tailscale_listener listener, tailscale_conn* conn_ou
 // and local_api_cred_out are all NUL-terminated.
 //
 // Returns zero on success or -1 on error, call tailscale_errmsg for details.
+// NOVA_MOD: loopback-only local-app proxy. A route of -1 pauses all traffic.
+// Updating a route cancels old connections; the listening port stays reserved.
+extern int tailscale_local_proxy_start(int port, int* id_out, int* port_out);
+extern int tailscale_local_proxy_route(int id, tailscale node);
+extern int tailscale_local_proxy_stats(int id);
+extern void tailscale_local_proxy_stop(int id);
+
 extern int tailscale_loopback(tailscale sd, char* addr_out, size_t addrlen, char* proxy_cred_out, char* local_api_cred_out);
 
 // tailscale_restart_loopback_if_needed verifies the loopback mux is

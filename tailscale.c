@@ -114,3 +114,13 @@ int tailscale_enable_funnel_to_localhost_plaintext_http1(tailscale sd, int local
 void tailscale_update_def_if(char *def_if) {
         return TsnetUpdateDefIf(def_if);
 }
+
+// NOVA_MOD: standalone, generation-scoped local-app proxy.
+extern int TsnetLocalProxyStart(int port, int* id_out, int* port_out);
+extern int TsnetLocalProxyRoute(int id, int node);
+extern int TsnetLocalProxyStats(int id);
+extern void TsnetLocalProxyStop(int id);
+int tailscale_local_proxy_start(int port, int* id_out, int* port_out) { return TsnetLocalProxyStart(port, id_out, port_out); }
+int tailscale_local_proxy_route(int id, tailscale node) { return TsnetLocalProxyRoute(id, node); }
+int tailscale_local_proxy_stats(int id) { return TsnetLocalProxyStats(id); }
+void tailscale_local_proxy_stop(int id) { TsnetLocalProxyStop(id); }
