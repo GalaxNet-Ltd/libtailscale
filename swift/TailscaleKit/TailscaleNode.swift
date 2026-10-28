@@ -248,6 +248,13 @@ public actor TailscaleNode {
         public let restarted: Bool
     }
 
+    /// Only browser consumers need a loopback listener. Foreground maintenance
+    /// must not create one just to observe the in-process LocalAPI.
+    public func repairExistingLoopbackIfNeeded() throws -> LoopbackRestartResult? {
+        guard loopbackConfig != nil else { return nil }
+        return try restartLoopbackIfNeeded()
+    }
+
     public func restartLoopbackIfNeeded() throws -> LoopbackRestartResult {
         guard let tailscale else {
             throw TailscaleError.badInterfaceHandle
@@ -275,7 +282,7 @@ public actor TailscaleNode {
             proxyCredential: String(cString: proxyCredBuf),
             localAPIKey: String(cString: apiCredBuf)
         )
-        // update the cached loopback endpoint so future LocalAPI and
+        // update the cached loopback endpoint so future
         // SOCKS5 clients use the recovered listener address immediately.
         loopbackConfig = config
         return LoopbackRestartResult(config: config, restarted: restartedOut.pointee != 0)

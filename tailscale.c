@@ -124,3 +124,19 @@ int tailscale_local_proxy_start(int port, int* id_out, int* port_out) { return T
 int tailscale_local_proxy_route(int id, tailscale node) { return TsnetLocalProxyRoute(id, node); }
 int tailscale_local_proxy_stats(int id) { return TsnetLocalProxyStats(id); }
 void tailscale_local_proxy_stop(int id) { TsnetLocalProxyStop(id); }
+
+// NOVA_MOD: asynchronous in-process LocalAPI bridge.
+extern int TsnetLocalAPIStart(int, char*, char*, void*, size_t, int, long long,
+    tailscale_localapi_callback, uint64_t, uint64_t*);
+extern void TsnetLocalAPICancel(uint64_t);
+int tailscale_localapi_start(tailscale node, const char* method, const char* path,
+    const void* body, size_t body_len, int timeout_ms, long long watch_mask,
+    tailscale_localapi_callback callback, uint64_t context, uint64_t* operation_out) {
+    return TsnetLocalAPIStart(node, (char*)method, (char*)path, (void*)body,
+        body_len, timeout_ms, watch_mask, callback, context, operation_out);
+}
+void tailscale_localapi_cancel(uint64_t operation) { TsnetLocalAPICancel(operation); }
+void tailscale_localapi_deliver(tailscale_localapi_callback callback, uint64_t context,
+    int event, int status, const void* bytes, size_t length) {
+    callback(context, event, status, bytes, length);
+}

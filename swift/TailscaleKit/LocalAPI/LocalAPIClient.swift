@@ -55,7 +55,7 @@ public actor LocalAPIClient {
     // MARK: - IPN Bus
 
     /// watchIPNBus subscribes to the IPN notification bus.   This is the primary mechanism that should be implemented for observing
-    /// changes to the state of the tailnet.  This opens a long-polling HTTP request and feeds events to the consumer, via the processor.
+    /// changes to the state of the tailnet.  This uses the Go in-process LocalClient and feeds events to the consumer, via the processor.
     /// For large tailnets, or tailnets with large numbers of ephemeral devices, it is recommended that you always pass the rateLimitNetmaps
     /// option.  Netap updates may be large and frequent and the resources required to parse the incoming JSON are non-trivial..  The
     /// rateLimitNetmaps option will limit netmap updates to roughly one ever 3 seconds.
@@ -68,14 +68,9 @@ public actor LocalAPIClient {
     /// - Returns: The MessageProcessor handling the incoming event stream.  This should be destroyed/stopped when the caller
     ///            wishes to unsubscribe from the event stream.
     public func watchIPNBus(mask: Ipn.NotifyWatchOpt, consumer: MessageConsumer) async throws -> MessageProcessor {
-        let params = [URLQueryItem(name: "mask", value: String(mask.rawValue))]
-        let (request, sessionConfig) = try await self.basicAuthURLRequest(endpoint: .watchIPNBus,
-                                                                          method: .GET,
-                                                                          params: params)
-
+        guard let handle = node.tailscale else { throw TailscaleError.badInterfaceHandle }
         let messageProcessor = await MessageProcessor(consumer: consumer, logger: logger)
-        // now it's async.
-        try await messageProcessor.start(request, config: sessionConfig)
+        try await messageProcessor.start(node: handle, mask: mask)
         return messageProcessor
     }
 
@@ -268,89 +263,20 @@ public actor LocalAPIClient {
 
     // MARK: - Requests
 
-    private func basicAuthURLRequest(endpoint: LocalAPIEndpoint,
-                                     path: String? = nil,
-                                     method: HTTPMethod,
-                                     headers: [String: String]? = nil,
-                                     params: [URLQueryItem]? = nil) async throws -> (URLRequest, URLSessionConfiguration) {
-
-        let (sessionConfig, loopbackConfig) = try await URLSessionConfiguration.tailscaleSession(node)
-
-        var endpointPath = endpoint.rawValue
-        if let path {
-            endpointPath = endpointPath + "/" + path
-        }
-
-        logger?.log("Requesting \(endpointPath) via \(loopbackConfig.ip!):\(loopbackConfig.port!)")
-
-        var urlComponents = URLComponents()
-        urlComponents.host = loopbackConfig.ip
-        urlComponents.port = loopbackConfig.port
-        urlComponents.scheme = "http"
-        urlComponents.path = "\(kLocalAPIPath)\(endpointPath)"
-        urlComponents.queryItems = params
-
-        guard let url = urlComponents.url else {
-            logger?.log("Cannot generate LocalAPI URL using \(urlComponents)")
-            throw LocalAPIError.localAPIURLRequestError
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = method.rawValue
-
-        // Headers as required by localAPI being accessed via the SOCK5 tsnet proxy.
-        // See: tailscale_loopback
-        let basicAuthString = "tsnet:\(loopbackConfig.localAPIKey)".data(using: .utf8)!.base64EncodedString()
-        request.setValue("Basic \(basicAuthString)", forHTTPHeaderField: "Authorization")
-        request.setValue("localapi", forHTTPHeaderField: "Sec-Tailscale")
-
-        return (request, sessionConfig)
-    }
-
-    private func parseAPIResponse(data: Data?,
-                                  response: URLResponse?,
-                                  error: Error?) -> Result<Data, Error> {
-
-        if let error {
-            return .failure(error)
-        }
-
-        guard let response = response as? HTTPURLResponse, let data = data else {
-            return .failure(LocalAPIError.localAPIBadResponse)
-        }
-
-        guard response.statusCode < 300 else {
-            // Try to parse it as a Go Error (a struct with one String "Error" field,
-            // otherwise make an error with the string as-is.
-            let decodedError = try? JSONDecoder().decode(GoError.self, from: data)
-            let body = String(bytes: data, encoding: .utf8) ?? ""
-            let error = LocalAPIError.localAPIStatusError(status: response.statusCode,
-                                                          body: decodedError?.Error ?? body)
-            return .failure(error)
-        }
-        return .success(data)
-    }
-
     private func doJSONAPIRequest<BodyT: Codable, ResultT: Sendable>(
         endpoint: LocalAPIEndpoint,
         path: String? = nil,
         method: HTTPMethod,
         bodyAsJSON: BodyT,
-        headers: [String: String]? = nil,
         timeoutInterval: TimeInterval = 60,
         resultTransformer: @escaping (_ result: Result<Data, Error>) -> ResultT
     ) async -> ResultT {
         do {
-            let encodedBody = try JSONEncoder().encode(bodyAsJSON)
-            return await doSimpleAPIRequest(endpoint: endpoint,
-                                            path: path,
-                                            method: method,
-                                            body: encodedBody,
-                                            headers: headers,
-                                            timeoutInterval: timeoutInterval,
+            let body = try JSONEncoder().encode(bodyAsJSON)
+            return await doSimpleAPIRequest(endpoint: endpoint, path: path, method: method,
+                                            body: body, timeoutInterval: timeoutInterval,
                                             resultTransformer: resultTransformer)
         } catch {
-            logger?.log("Failed to encode request body as JSON: \(error)")
             return resultTransformer(.failure(LocalAPIError.localAPIJSONEncodeError))
         }
     }
@@ -361,43 +287,28 @@ public actor LocalAPIClient {
         params: [URLQueryItem]? = nil,
         method: HTTPMethod,
         body: Data? = nil,
-        headers: [String: String]? = nil,
         timeoutInterval: TimeInterval = 60,
-        resultTransformer: @escaping (_ result: Result<Data, Error>) -> T) async -> T {
-
-            var request: URLRequest
-            var sessionConfig: URLSessionConfiguration
-            do {
-                (request, sessionConfig) = try await self.basicAuthURLRequest(endpoint: endpoint,
-                                                             path: path,
-                                                             method: method,
-                                                             headers: headers,
-                                                             params: params)
-
-            } catch {
-                return resultTransformer(.failure(error))
+        resultTransformer: @escaping (_ result: Result<Data, Error>) -> T
+    ) async -> T {
+        do {
+            guard let handle = node.tailscale else { throw TailscaleError.badInterfaceHandle }
+            var components = URLComponents()
+            components.path = kLocalAPIPath + endpoint.rawValue + (path.map { "/" + $0 } ?? "")
+            components.queryItems = params
+            guard let requestPath = components.string else { throw LocalAPIError.localAPIURLRequestError }
+            let response = try await InProcessLocalAPIOperation.request(
+                node: handle, method: method.rawValue, path: requestPath, body: body, timeout: timeoutInterval
+            )
+            guard response.status < 300 else {
+                let error = try? JSONDecoder().decode(GoError.self, from: response.body)
+                throw LocalAPIError.localAPIStatusError(status: response.status,
+                    body: error?.Error ?? String(data: response.body, encoding: .utf8) ?? "")
             }
-
-            if let body {
-                request.httpBody = body
-            }
-
-            request.timeoutInterval = timeoutInterval
-
-            do {
-                let session = URLSession(configuration: sessionConfig)
-                let (data, response) = try await session.data(for: request)
-                switch self.parseAPIResponse(data: data, response: response, error: nil) {
-                case .success(let data):
-                    return resultTransformer(.success(data))
-                case .failure(let error):
-                    logger?.log("LocalAPI request to \(path ?? "<none>") failed with \(error)")
-                    return resultTransformer(.failure(error))
-                }
-            } catch {
-                return resultTransformer(.failure(error))
-            }
+            return resultTransformer(.success(response.body))
+        } catch {
+            return resultTransformer(.failure(error))
         }
+    }
 
     // MARK: - Transformers
 

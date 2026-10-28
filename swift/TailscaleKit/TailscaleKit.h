@@ -13,6 +13,7 @@ FOUNDATION_EXPORT const unsigned char TailscaleKitVersionString[];
 // TODO: Is there away to avoid the header duplication here?
 // WARNING: Adding/changing the libtailscale functions must be replicated here
 #include <stddef.h>
+#include <stdint.h>
 
 #ifndef TAILSCALEKIT_H
 #define TAILSCALEKIT_H
@@ -31,6 +32,25 @@ extern "C" {
 
 // tailscale is a handle onto a Tailscale server.
 typedef int tailscale;
+
+// NOVA_MOD: in-process LocalAPI. No LocalAPI TCP listener is created.
+// Callbacks are serial per operation, on a Go worker thread. Copy bytes before
+// returning; never block the callback waiting for an actor or the main thread.
+// Events: 1 = HTTP headers (status is HTTP status); 2 = complete response body
+// or one JSON IPN notification; 3 = terminal (status is errno, zero on success,
+// bytes contain an optional diagnostic). Exactly one terminal callback follows
+// a successful start, including cancellation/node close. No callbacks follow it.
+// On a nonzero start return there are no callbacks. Callbacks may precede return.
+// watch_mask = -1 performs an ordinary request with an overall timeout.
+// watch_mask >= 0 starts a watch with only a startup timeout, no lifetime TTL.
+// Paths must be relative /localapi/v0/ paths. Argument bytes are copied at start.
+// Cancellation is asynchronous and idempotent; node close cancels its operations.
+typedef void (*tailscale_localapi_callback)(uint64_t context, int event, int status,
+    const void* bytes, size_t length);
+extern int tailscale_localapi_start(tailscale node, const char* method, const char* path,
+    const void* body, size_t body_len, int timeout_ms, long long watch_mask,
+    tailscale_localapi_callback callback, uint64_t context, uint64_t* operation_out);
+extern void tailscale_localapi_cancel(uint64_t operation);
 
 // tailscale_new creates a tailscale server object.
 //

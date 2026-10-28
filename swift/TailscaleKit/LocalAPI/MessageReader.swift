@@ -3,259 +3,153 @@
 
 import Foundation
 
-enum MessageQueueError: Error {
+enum MessageQueueError: Error, Equatable {
     case queueCongested
     case unexpectedEndOfStream
 }
 
-/// Bound pending notifications while the consumer is busy. Overflow requires a
-/// new subscription with .initialState so no backend state is silently lost.
 let kMaxQueueSize = 24
 
-/// Immutable correlation shared across the delegate queue and consumer task.
-/// Only phase names and monotonic elapsed times are logged, never HTTP data.
 struct WatchStartupTrace: Sendable {
     private let logger: (any LogSink)?
     private let identifier = UUID().uuidString
     private let startedAt = DispatchTime.now().uptimeNanoseconds
-
-    init(logger: (any LogSink)?) {
-        self.logger = logger
-    }
-
+    init(logger: (any LogSink)?) { self.logger = logger }
     func record(_ phase: String) {
         let elapsed = (DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
-        logger?.log("IPN watch startup id=\(identifier) phase=\(phase) elapsed_ms=\(elapsed)")
+        logger?.log("IPN watch startup id=\(identifier) transport=in-process phase=\(phase) elapsed_ms=\(elapsed)")
     }
 }
 
-/// Frames the IPN bus's newline-delimited JSON independently of HTTP chunks.
-final class MessageReader: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    /// A quiet notification bus is healthy. Bound its HTTP lifetime to one day
-    /// instead of inheriting URLSession's 60-second inactivity timeout. The
-    /// owning processor still stops it immediately through explicit cancellation.
-    static let watchTimeoutInterval: TimeInterval = 24 * 60 * 60
+private final class IPNMessageBudget: @unchecked Sendable {
+    private let lock = NSLock()
+    private let limit: Int
+    private var bytes = 0
+    init(limit: Int) { self.limit = limit }
+    func reserve(_ count: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard count <= limit - bytes else { return false }
+        bytes += count
+        return true
+    }
+    func release(_ count: Int) {
+        lock.lock()
+        bytes -= count
+        lock.unlock()
+    }
+}
 
-    let messages: AsyncThrowingStream<Data, Error>
+/// Accounts for queued and currently consumed bytes, including a large netmap.
+final class IPNMessage: Sendable {
+    let data: Data
+    private let budget: IPNMessageBudget
+    fileprivate init(data: Data, budget: IPNMessageBudget) { self.data = data; self.budget = budget }
+    deinit { budget.release(data.count) }
+}
 
-    /// URLSession invokes all delegate methods on this serial queue. Other
-    /// entry points enqueue their state changes onto the same queue.
-    private let workQueue = OperationQueue()
-    private let continuation: AsyncThrowingStream<Data, Error>.Continuation
-    private var buffer = Data()
-    private var scannedByteCount = 0
-    private var ipnWatchSession: URLSession?
-    private var dataTask: URLSessionDataTask?
+/// Go supplies complete JSON notifications. A bounded queue never blocks Go on
+/// an actor: overflow closes this watch and the owner resubscribes with a snapshot.
+final class MessageReader: @unchecked Sendable {
+    let messages: AsyncThrowingStream<IPNMessage, Error>
+    private let continuation: AsyncThrowingStream<IPNMessage, Error>.Continuation
+    private let lock = NSLock()
+    private let budget: IPNMessageBudget
+    private let startupTimeout: TimeInterval
+    private var operation: InProcessLocalAPIOperation?
     private var startupContinuation: CheckedContinuation<Void, Error>?
-    private let startupTimeoutNanoseconds: UInt64
-    private var startupDeadlineTask: Task<Void, Never>?
+    private var terminalError: Error?
     private var started = false
-    private var finished = false
-    private var startupTrace: WatchStartupTrace?
-    private var receivedFirstBody = false
-    private var framedFirstMessage = false
+    private var trace: WatchStartupTrace?
+    private var receivedFirstMessage = false
 
-    init(startupTimeoutNanoseconds: UInt64 = 60_000_000_000) {
-        self.startupTimeoutNanoseconds = startupTimeoutNanoseconds
-        var streamContinuation: AsyncThrowingStream<Data, Error>.Continuation?
-        messages = AsyncThrowingStream(bufferingPolicy: .bufferingOldest(kMaxQueueSize)) {
-            streamContinuation = $0
-        }
-        continuation = streamContinuation!
-        super.init()
-        workQueue.maxConcurrentOperationCount = 1
-        workQueue.name = "io.tailscale.ipn.MessageReader.workQueue"
-        continuation.onTermination = { [weak self] _ in
-            self?.stop()
-        }
+    init(startupTimeout: TimeInterval = 10, maximumQueuedBytes: Int = 32 * 1024 * 1024) {
+        self.startupTimeout = startupTimeout
+        budget = IPNMessageBudget(limit: maximumQueuedBytes)
+        var captured: AsyncThrowingStream<IPNMessage, Error>.Continuation?
+        messages = AsyncThrowingStream(bufferingPolicy: .bufferingOldest(kMaxQueueSize)) { captured = $0 }
+        continuation = captured!
+        continuation.onTermination = { [weak self] _ in self?.stop() }
     }
+    deinit { operation?.cancel() }
 
-    /// Stop both the HTTP subscription and any consumer waiting for a message.
-    /// Repeated calls are harmless, including before HTTP startup completes.
-    func stop() {
-        workQueue.addOperation {
-            self.finish(throwing: CancellationError())
-        }
-    }
-
-    /// Wait only for the local HTTP subscription to be accepted. Backend
-    /// readiness continues to come from the ordered IPN notifications.
-    func start(_ request: URLRequest, config: URLSessionConfiguration,
-               trace: WatchStartupTrace? = nil) async throws {
-        trace?.record("reader_enqueued")
+    func start(node: TailscaleHandle, mask: Ipn.NotifyWatchOpt, trace: WatchStartupTrace? = nil) async throws {
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (startup: CheckedContinuation<Void, Error>) in
-                workQueue.addOperation {
-                    guard !self.finished else {
-                        startup.resume(throwing: CancellationError())
-                        return
-                    }
-                    guard !self.started else {
-                        startup.resume(throwing: LocalAPIError.localAPIBadResponse)
-                        return
-                    }
-                    self.started = true
-                    self.startupTrace = trace
-                    trace?.record("reader_queue_entered")
-                    self.startupContinuation = startup
-                    self.startStartupDeadline()
-                    // Keep this policy local to the streaming watch. Preserve
-                    // proxy/auth configuration without changing ordinary API
-                    // request timeouts on the caller's configuration instance.
-                    let watchConfig = config.copy() as! URLSessionConfiguration
-                    watchConfig.timeoutIntervalForRequest = Self.watchTimeoutInterval
-                    watchConfig.timeoutIntervalForResource = Self.watchTimeoutInterval
-                    trace?.record("configuration_waits_\(watchConfig.waitsForConnectivity)_proxy_\(watchConfig.connectionProxyDictionary?.isEmpty == false)")
-                    var watchRequest = request
-                    watchRequest.timeoutInterval = Self.watchTimeoutInterval
-                    let session = URLSession(configuration: watchConfig,
-                                             delegate: self,
-                                             delegateQueue: self.workQueue)
-                    self.ipnWatchSession = session
-                    let task = session.dataTask(with: watchRequest)
-                    self.dataTask = task
-                    trace?.record("task_resume")
-                    task.resume()
-                }
+            try await withCheckedThrowingContinuation { startup in
+                begin(node: node, mask: mask, trace: trace, startup: startup)
             }
-        } onCancel: {
-            self.stop()
-        }
+        } onCancel: { self.stop() }
     }
 
-    // MARK: - URLSessionDataDelegate
-
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didCompleteWithError error: Error?) {
-        guard session === ipnWatchSession, !finished else { return }
-        // A watch is long-lived; even a clean EOF requires resubscription.
-        finish(throwing: error ?? MessageQueueError.unexpectedEndOfStream)
+    private func begin(node: TailscaleHandle, mask: Ipn.NotifyWatchOpt, trace: WatchStartupTrace?,
+                       startup: CheckedContinuation<Void, Error>) {
+        let operation = InProcessLocalAPIOperation { [weak self] event in self?.receive(event) }
+        lock.lock()
+        if let error = terminalError { lock.unlock(); startup.resume(throwing: error); return }
+        guard !started else { lock.unlock(); startup.resume(throwing: LocalAPIError.localAPIBadResponse); return }
+        started = true
+        startupContinuation = startup
+        self.operation = operation
+        self.trace = trace
+        lock.unlock()
+        trace?.record("native_start")
+        do {
+            try operation.start(node: node, method: "GET", path: "/localapi/v0/watch-ipn-bus",
+                                timeout: startupTimeout, watchMask: Int64(mask.rawValue))
+        } catch { finish(error) }
     }
 
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive response: URLResponse,
-                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
-        guard session === ipnWatchSession, !finished else {
-            completionHandler(.cancel)
-            return
-        }
-        startupTrace?.record("response_headers")
-        guard let httpResponse = response as? HTTPURLResponse else {
-            completionHandler(.cancel)
-            finish(throwing: LocalAPIError.localAPIBadResponse)
-            return
-        }
-        guard httpResponse.statusCode < 300 else {
-            completionHandler(.cancel)
-            finish(throwing: LocalAPIError.localAPIStatusError(status: httpResponse.statusCode, body: ""))
-            return
-        }
-
-        let startup = startupContinuation
-        startupContinuation = nil
-        startupDeadlineTask?.cancel()
-        startupDeadlineTask = nil
-        startup?.resume()
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive data: Data) {
-        guard session === ipnWatchSession else { return }
-        if !finished, !data.isEmpty, !receivedFirstBody {
-            receivedFirstBody = true
-            startupTrace?.record("first_body")
-        }
-        // Already on workQueue: deliver without another queue hop or polling.
-        frameMessages(in: data)
-    }
-
-    /// Feed bytes through the same framing path without a network dependency.
-    func receiveData(_ data: Data) async {
-        await withCheckedContinuation { completion in
-            workQueue.addOperation {
-                self.frameMessages(in: data)
-                completion.resume()
-            }
-        }
-    }
-
-    private func frameMessages(in data: Data) {
-        guard !finished, !data.isEmpty else { return }
-        buffer.append(data)
-        var messageStart = buffer.startIndex
-        var searchStart = buffer.index(buffer.startIndex, offsetBy: scannedByteCount)
-        while let newline = buffer[searchStart...].firstIndex(of: kJsonNewline) {
-            let nextStart = buffer.index(after: newline)
-            if newline != messageStart {
-                let message = Data(buffer[messageStart..<newline])
-                if !framedFirstMessage {
-                    framedFirstMessage = true
-                    startupTrace?.record("first_message_framed")
-                }
-                switch continuation.yield(message) {
-                case .enqueued:
-                    break
-                case .dropped:
-                    finish(throwing: MessageQueueError.queueCongested)
-                    return
-                case .terminated:
-                    finish(throwing: CancellationError())
-                    return
-                @unknown default:
-                    finish(throwing: MessageQueueError.queueCongested)
-                    return
-                }
-            }
-            messageStart = nextStart
-            searchStart = nextStart
-        }
-        if messageStart != buffer.startIndex {
-            buffer.removeSubrange(buffer.startIndex..<messageStart)
-        }
-        // Previously inspected partial bytes cannot acquire a delimiter when
-        // the next HTTP chunk arrives, so scan only newly appended bytes.
-        scannedByteCount = buffer.count
-    }
-
-    /// The long stream timeout applies only once its HTTP subscription exists.
-    /// Keep stalled headers bounded independently so the owner can retry them.
-    private func startStartupDeadline() {
-        let timeout = startupTimeoutNanoseconds
-        startupDeadlineTask = Task { [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: timeout)
-            } catch {
+    /// Serial native callbacks also provide the injection boundary for queue tests.
+    func receive(_ event: LocalAPIEvent) {
+        lock.lock()
+        guard terminalError == nil else { lock.unlock(); return }
+        switch event {
+        case .headers(let status):
+            guard status == 200 else {
+                lock.unlock()
+                finish(LocalAPIError.localAPIStatusError(status: status, body: ""))
                 return
             }
-            self?.workQueue.addOperation { [weak self] in
-                guard let self, self.startupContinuation != nil else { return }
-                self.finish(throwing: URLError(.timedOut))
+            trace?.record("watch_accepted")
+            let startup = startupContinuation
+            startupContinuation = nil
+            lock.unlock()
+            startup?.resume()
+        case .data(let data):
+            guard budget.reserve(data.count) else { lock.unlock(); finish(MessageQueueError.queueCongested); return }
+            if !receivedFirstMessage { receivedFirstMessage = true; trace?.record("first_message") }
+            let message = IPNMessage(data: data, budget: budget)
+            lock.unlock()
+            switch continuation.yield(message) {
+            case .enqueued: break
+            case .dropped: finish(MessageQueueError.queueCongested)
+            case .terminated: stop()
+            @unknown default: finish(MessageQueueError.queueCongested)
+            }
+        case .finished(let result):
+            lock.unlock()
+            switch result {
+            case .success: finish(MessageQueueError.unexpectedEndOfStream)
+            case .failure(let error): finish(error)
             }
         }
     }
 
-    /// Called only on workQueue. Finishing the bounded stream preserves queued
-    /// messages before its error, while cancellation stops its worker promptly.
-    private func finish(throwing error: Error) {
-        guard !finished else { return }
-        finished = true
-        // A single terminal record also identifies startup failures/cancellation.
-        startupTrace?.record(startupContinuation == nil ? "watch_finished" : "startup_failed")
-        startupDeadlineTask?.cancel()
-        startupDeadlineTask = nil
-        buffer.removeAll()
-        scannedByteCount = 0
+    func stop() { finish(CancellationError()) }
+
+    private func finish(_ error: Error) {
+        lock.lock()
+        guard terminalError == nil else { lock.unlock(); return }
+        terminalError = error
         let startup = startupContinuation
         startupContinuation = nil
+        let operation = self.operation
+        self.operation = nil
+        let trace = self.trace
+        lock.unlock()
+        trace?.record(startup == nil ? "watch_finished" : "startup_failed")
         startup?.resume(throwing: error)
         continuation.finish(throwing: error)
-        dataTask?.cancel()
-        dataTask = nil
-        ipnWatchSession?.invalidateAndCancel()
-        ipnWatchSession = nil
+        operation?.cancel()
     }
 }

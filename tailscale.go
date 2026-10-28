@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -42,7 +43,7 @@ var servers struct {
 type server struct {
 	s       *tsnet.Server
 	lastErr string
-	started bool
+	started atomic.Bool
 	logFile *os.File
 }
 
@@ -114,7 +115,7 @@ func TsnetStart(sd C.int) C.int {
 	}
 	err := s.s.Start()
 	if err == nil {
-		s.started = true
+		s.started.Store(true)
 	}
 	return s.recErr(err)
 }
@@ -127,7 +128,7 @@ func TsnetUp(sd C.int) C.int {
 	}
 	_, err := s.s.Up(context.Background()) // cancellation is via TsnetClose
 	if err == nil {
-		s.started = true
+		s.started.Store(true)
 	}
 	return s.recErr(err)
 }
@@ -145,10 +146,11 @@ func TsnetClose(sd C.int) C.int {
 		return C.EBADF
 	}
 	defer s.closeLogFile()
+	cancelNodeLocalAPIOperations(s)
 
 	// TODO: cancel Up
 	// TODO: close related listeners / conns.
-	if !s.started {
+	if !s.started.Load() {
 		// Server was never started, nothing to close.
 		return 0
 	}
@@ -227,7 +229,7 @@ func TsnetListen(sd C.int, network, addr *C.char, listenerOut *C.int) C.int {
 	if err != nil {
 		return s.recErr(err)
 	}
-	s.started = true
+	s.started.Store(true)
 
 	// The tailscale_listener we return to C is one side of a socketpair(2).
 	// We do this so we can proactively call ln.Accept in a goroutine and
@@ -454,7 +456,7 @@ func TsnetDial(sd C.int, network, addr *C.char, connOut *C.int) C.int {
 	if err != nil {
 		return s.recErr(err)
 	}
-	s.started = true
+	s.started.Store(true)
 	if err := newConn(s, netConn, connOut); err != nil {
 		return s.recErr(err)
 	}
@@ -475,7 +477,7 @@ func TsnetDialWithTimeout(sd C.int, network, addr *C.char, timeoutSecs C.int, co
 		defer cancel()
 	}
 
-	s.started = true
+	s.started.Store(true)
 	netConn, err := s.s.Dial(ctx, C.GoString(network), C.GoString(addr))
 	if err != nil {
 		return s.recErr(err)

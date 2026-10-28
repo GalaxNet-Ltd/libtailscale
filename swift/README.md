@@ -57,7 +57,7 @@ From /swift
 $ make test
 ```
 
-To run only the IPN stream framing, ordering, overflow and cancellation
+To run the native LocalAPI bridge, IPN ordering, overflow and cancellation
 regressions, first build the local Go archives and `tstestcontrol` library, then
 run from `/swift`:
 
@@ -72,8 +72,42 @@ xcodebuild -project TailscaleKit.xcodeproj -scheme TailscaleKitXCTests \
 
 The existing connection test file still references the removed `Listener` API,
 so this focused command excludes that file from compilation. It does not verify
-the legacy connection tests. The stream tests use an in-memory HTTP protocol
-and do not contact a coordinator or require an authorized tailnet.
+the legacy connection tests. The stream tests include real C/Go callbacks and disposable unauthenticated
+tsnet nodes pointed at a loopback-only unavailable coordinator. They do not use
+the app's configured tailnets or require authorization. Go tests additionally
+exercise controlled HTTP handlers over memnet, node-close races and deadlines:
+`go test -race . ./localproxy` from the repository root.
+
+## NovaScale in-process LocalAPI bridge
+
+Swift `LocalAPIClient` routes status, preferences, login, profiles, ping and IPN
+watching through `tailscale_localapi_start/cancel` into the node's public
+`tsnet.Server.LocalClient()`. That client uses tsnet's Go memnet listener: HTTP
+semantics remain, with no LocalAPI TCP/Unix socket or URLSession dependency.
+`loopback()` remains available for browser SOCKS consumers; foreground repair
+can use `repairExistingLoopbackIfNeeded()` without creating a listener.
+
+The C API requires an already started node. It copies request arguments before
+returning, supplies an opaque operation ID, and delivers serial header/data/end
+callbacks on Go workers. Callback bytes are borrowed for the call only. Callers
+must copy them and must not synchronously wait for a Swift actor/main thread.
+Callbacks may arrive before start returns; a failed start emits no callbacks.
+Successful starts always terminate once, including cancellation and node close.
+Close cancels only operations owned by that node. Swift uses numeric registry
+tokens, never retained Go/Swift object pointers across the C boundary.
+
+Unary calls keep their existing whole-request timeouts and HTTP status/error
+bodies. Watches have a ten-second startup deadline, including the first initial
+snapshot when requested, and no established-watch lifetime timeout. Cancellation
+is explicit and idempotent. The Swift queue permits 24 notifications and 32 MiB
+of retained payloads, including the message held by its consumer. Overflow, EOF,
+malformed data or native failure closes the watch; callers must subscribe again
+with initial state and netmap. Notifications are decoded and awaited in order.
+
+This transport resumes with the existing process; it does not run or wake an app
+while iOS suspends it. Callers still need node-generation checks, observer-health
+state, initial-snapshot reconciliation and backend/network recovery. Process
+termination always requires a new node and watch.
 
 ## NovaScale local-app proxy bridge
 
@@ -156,38 +190,25 @@ TailscaleKit.framework also includes a functional (though somewhat incomplete) i
 LocalAPI which can be used to track the state of the embedded tailscale instance in much greater
 detail.
 
-The IPN bus watch uses a dedicated copy of the HTTP configuration and an explicit
-24-hour request and resource timeout. A quiet bus must not inherit the ordinary
-[60-second request inactivity timeout](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/timeoutintervalforrequest).
-The [resource timeout](https://developer.apple.com/documentation/foundation/urlsessionconfiguration/timeoutintervalforresource)
-bounds the whole subscription to 24 hours; its owner must resubscribe on failure
-or expiry. HTTP subscription startup retains a separate 60-second deadline
-until successful response headers arrive; a stalled startup fails with a timeout
-so its owner can retry. `MessageProcessor.cancel()` still stops the watch immediately.
-Ordinary LocalAPI requests and the caller's configuration retain their existing
-timeout policy. The focused stream tests verify the request passed to URLSession,
-configuration isolation, cancellation of that long-lived request, and the
-startup deadline's failure and cancellation after accepted headers.
-Replacement-watch tests also verify real HTTP cancellation while an old consumer
-is suspended or startup is awaiting headers, and independent ordered delivery
-on a new watch. Buffered and late old bytes use the reader's test injection path;
-these tests do not simulate an actual control-server/tailnet switch or deliver
-unsupported URLProtocol callbacks after cancellation.
+Both the IPN watch and ordinary `LocalAPIClient` requests use the
+[in-process LocalAPI bridge](#novascale-in-process-localapi-bridge). The watch has
+a ten-second startup deadline and no established-subscription lifetime timeout.
+Ordinary requests retain their per-request deadlines. Neither path uses
+URLSession or the TCP `Loopback()` endpoint.
 
-Watch startup also emits a bounded set of `IPN watch startup` diagnostic records
-through the existing LogSink. One correlation ID and monotonic elapsed milliseconds
-cover reader queue entry, task resume, response headers, first body/frame,
-startup continuation return, worker launch/entry and first consumer delivery.
-The configuration record contains only connectivity-wait/proxy-present booleans;
-no request headers, credentials or notification payloads are included. Reader
-flags stay on its serial delegate queue and worker flags stay in the consumer
-task. Resume-to-headers includes transport, local handler and delegate scheduling;
-these timestamps alone cannot attribute that interval to the coordinator or
-network. First delivery records the consumer callback returning; it does not
-establish a Running event or readiness publication, particularly if cancellation
-occurred during that callback. Compare elapsed times rather than cross-thread
-log-line order. The focused tests distinguish accepted HTTP startup from a suspended
-consumer and verify one-time first-event records without logging sensitive data.
+`Loopback()` still provides the authenticated SOCKS5 endpoint used for browser
+traffic, and still exposes its legacy authenticated HTTP LocalAPI service. The
+Swift LocalAPI client no longer calls that HTTP listener. The separately enabled
+local-app proxy serves HTTP/CONNECT and SOCKS5 to other applications and owns a
+different TCP listener; it is not part of the in-process migration.
+
+Watch startup emits `IPN watch startup` records with a correlation ID,
+`transport=in-process`, phase and monotonic elapsed milliseconds. Phases cover
+native start, subscription acceptance, first notification, worker startup,
+decode and consumer delivery. Credentials and notification payloads are not
+logged by this trace. Compare elapsed times rather than cross-thread log order.
+First delivery means the consumer callback returned; inspect the corresponding
+backend state to establish readiness.
 
 ### Examples
 

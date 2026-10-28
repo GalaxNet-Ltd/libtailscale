@@ -3,8 +3,6 @@
 
 import Foundation
 
-let kJsonNewline = UInt8(ascii: "\n")
-
 /// A MessageConsumer consumes incoming messages from the IPNBus and handles any
 /// potential errors.
 public protocol MessageConsumer: Actor {
@@ -31,12 +29,12 @@ public class MessageProcessor: @unchecked Sendable {
         cancel()
     }
 
-    func start(_ request: URLRequest, config: URLSessionConfiguration, errorHandler: (@Sendable (Error) -> Void)? = nil) async throws {
+    func start(node: TailscaleHandle, mask: Ipn.NotifyWatchOpt, errorHandler: (@Sendable (Error) -> Void)? = nil) async throws {
         let trace = WatchStartupTrace(logger: logger)
         trace.record("processor_start")
-        logger?.log("Starting MessageProcessor for \(request.url?.absoluteString ?? "nil")")
+        logger?.log("Starting IPN watch over in-process LocalAPI")
         do {
-            try await reader.start(request, config: config, trace: trace)
+            try await reader.start(node: node, mask: mask, trace: trace)
             try Task.checkCancellation()
             trace.record("reader_start_returned")
             startProcessingMessages(errorHandler: errorHandler, trace: trace)
@@ -46,7 +44,7 @@ public class MessageProcessor: @unchecked Sendable {
         }
     }
 
-    /// Cancel the consumer and close the HTTP watch. The worker captures its
+    /// Cancel the consumer and close the in-process watch. The worker captures its
     /// dependencies rather than this processor, so releasing it also stops it.
     public func cancel() {
         lifecycleLock.lock()
@@ -74,7 +72,8 @@ public class MessageProcessor: @unchecked Sendable {
             let decoder = JSONDecoder()
             var deliveredFirstMessage = false
             do {
-                for try await data in reader.messages {
+                for try await message in reader.messages {
+                    let data = message.data
                     try Task.checkCancellation()
                     let notify: Ipn.Notify
                     do {
